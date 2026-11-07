@@ -10,6 +10,8 @@ const connLabel = document.getElementById('conn-label');
 const endpoint = document.getElementById('endpoint');
 const installedButton = document.getElementById('installed');
 const latestButton = document.getElementById('latest');
+const updateButton = document.getElementById('update');
+const updateVersion = document.getElementById('update-version');
 const gear = document.getElementById('gear');
 
 const STATE_TONES = {
@@ -69,6 +71,16 @@ function renderVersions(snapshot) {
     : 'DeepSeek Harness version is not known yet (backend not started).';
   installedButton.dataset.state = installedVersion ? 'ready' : 'loading';
 
+  // The circular-arrow offer exists only while an update is available: the new
+  // version is never shown as an action when there is nothing to install.
+  const target = snapshot.updateAvailable ? (snapshot.latest?.version ?? null) : null;
+  updateButton.hidden = target === null;
+  if (target !== null) {
+    updateVersion.textContent = target;
+    updateButton.setAttribute('aria-label', `Update DeepSeek Harness to ${target}`);
+    updateButton.title = `Update DeepSeek Harness ${installedVersion ?? ''} → ${target} in the isolated runtime`;
+  }
+
   releaseUrl = snapshot.latest?.url ?? null;
   if (snapshot.latest === null) {
     setLabel(latestButton, 'GitHub …');
@@ -98,6 +110,10 @@ gear.addEventListener('click', () => {
   window.footer
     ?.toggleSettings({ x: rect.x, y: rect.y, width: rect.width, height: rect.height })
     .catch(() => gear.setAttribute('aria-expanded', 'false'));
+});
+
+updateButton.addEventListener('click', () => {
+  window.footer?.openUpdate();
 });
 
 latestButton.addEventListener('click', () => {

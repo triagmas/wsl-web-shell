@@ -121,6 +121,11 @@ export const PREPARE_ISOLATION_SCRIPT = [
 export const RESOLVE_RUNTIME_SCRIPT = [
   'iso="$1";',
   'case "$iso" in "~") iso="$HOME";; "~/"*) iso="$HOME/${iso#"~/"}";; /*) ;; *) iso="";; esac;',
+  // Canonical root: `pwd -P` resolves a symlinked `$HOME`, so the updater can
+  // compare the executable path exactly instead of guessing with substrings.
+  'root="";',
+  'if [ -n "$iso" ] && [ -d "$iso" ]; then root="$(cd "$iso" && pwd -P 2>/dev/null)" || root=""; fi;',
+  'printf "root=%s\n" "$root";',
   'dsh="";',
   'if [ -n "$iso" ] && [ -x "$iso/runtime/bin/dsh" ]; then dsh="$iso/runtime/bin/dsh"; fi;',
   'if [ -z "$dsh" ]; then for c in "$HOME/.local/bin/dsh" /usr/local/bin/dsh /usr/bin/dsh "$HOME/.npm-global/bin/dsh"; do',

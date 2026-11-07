@@ -75,6 +75,18 @@ render smoke (`npm run chrome:smoke`) and the screenshots in
 
 ![Footer bar over a mock upstream surface](docs/media/footer-bar.png)
 
+When GitHub reports a newer release, the bar also offers a one-click update of the
+isolated runtime: the exact published version is staged below the app's own runtime
+root, the app-owned backend is stopped only for the swap, the previous installation
+is kept for rollback and an interrupted swap is repaired on the next start. The new
+version is reported as successful only after it served the WebUI, and the portable
+EXE then restarts itself. The global `dsh`, the official Windows Harness and the
+projects are never touched. Details in [docs/update.md](docs/update.md).
+
+| Before | During / after |
+|---|---|
+| ![Update confirmation](docs/media/update-confirm.png) | ![Update terminal](docs/media/update-terminal.png) |
+
 ### Diagnostics for support
 
 When a window disappears or the app exits, the log now distinguishes the cause
@@ -103,12 +115,17 @@ npm run build         # esbuild -> dist/ (main, preloads, local pages, icons)
 npm start             # build + run Electron on the current platform
 npm run smoke:headless  # Linux/WSL: launch the built app under Xvfb with a
                         # sanitised PATH/HOME; must reach a clean terminal error
-npm run chrome:smoke    # Linux/WSL: render the footer and settings popover with
-                        # fixed test data and assert what they show (no WSL)
+npm run chrome:smoke    # Linux/WSL: render the footer, settings popover and the
+                        # update windows with fixed test data and assert what
+                        # they show (no WSL)
 npm run screenshots     # same render, writes docs/media/*.png
 npm run composition:smoke  # real BrowserWindow + WebContentsView composition
                         # against a local test server: bar, bounds, resize, session,
                         # cold-start attach order
+node scripts/check-relaunch.cjs <dir> <exe>
+                        # Windows CI only: verifies that the packaged EXE
+                        # relaunches itself from the portable file, not from the
+                        # temporary extraction directory
 npm run paint:probe     # real screen pixels of a composed window: the remote
                         # WebUI must be visible above the bar (needs a display;
                         # CI uses xvfb on Linux and a desktop session on Windows)
@@ -156,6 +173,7 @@ are never presented as a real Windows/WSL acceptance PASS.
 - [Architecture / implementation notes](docs/architecture.md)
 - [Upstream `dsh web` contract and unknowns](docs/upstream-dsh-web.md)
 - [Footer bar, versions and settings popover](docs/footer.md)
+- [One-click update of the isolated runtime](docs/update.md)
 - [Issue #9 evidence (build, checks, artifact)](docs/evidence/r09.md)
 - [M1 issue](https://github.com/triagmas/wsl-web-shell/issues/1) and [agent guidance](AGENTS.md)
 

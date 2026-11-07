@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'" />
+    <title>Update DeepSeek Harness</title>
+    <link rel="stylesheet" href="update.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Update DeepSeek Harness</h1>
+      <p class="lead">
+        The exact published version is installed into the isolated runtime of the selected WSL distribution. The
+        previous installation is kept for rollback.
+      </p>
+
+      <dl class="facts">
+        <dt>Installed</dt>
+        <dd id="installed">—</dd>
+        <dt>New version</dt>
+        <dd id="target" class="target">—</dd>
+        <dt>Distribution</dt>
+        <dd id="distro">—</dd>
+        <dt>Isolated runtime</dt>
+        <dd id="root" class="path">—</dd>
+        <dt>Rollback copy</dt>
+        <dd id="rollback" class="path">—</dd>
+      </dl>
+
+      <p class="warn" id="blocked" hidden></p>
+
+      <ul class="notes">
+        <li>Only <code>@deepseek-ai/dsh</code> inside the isolated runtime is replaced.</li>
+        <li>Your global installation, the official Windows app and your projects are not touched.</li>
+        <li>The app restarts itself after a successful update.</li>
+      </ul>
+
+      <div class="actions">
+        <button type="button" id="cancel" class="secondary">Cancel</button>
+        <button type="button" id="start" class="primary">Update</button>
+      </div>
+    </main>
+    <script src="confirm.js"></script>
+  </body>
+</html>

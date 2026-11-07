@@ -288,10 +288,25 @@ describe('environment preparation', () => {
     expect(parseRuntimeProbe('dsh=/usr/bin/dsh\nnode=/usr/bin/node\n')).toEqual({
       dshPath: '/usr/bin/dsh',
       nodePath: '/usr/bin/node',
+      rootPath: null,
     });
-    expect(parseRuntimeProbe('dsh=\nnode=\n')).toEqual({ dshPath: null, nodePath: null });
-    expect(parseRuntimeProbe('dsh=relative/dsh\nnode=/usr/../node\n')).toEqual({ dshPath: null, nodePath: null });
-    expect(parseRuntimeProbe('garbage\r\ndsh=/opt/dsh\r\n')).toEqual({ dshPath: '/opt/dsh', nodePath: null });
+    expect(parseRuntimeProbe('dsh=\nnode=\n')).toEqual({ dshPath: null, nodePath: null, rootPath: null });
+    expect(parseRuntimeProbe('dsh=relative/dsh\nnode=/usr/../node\n')).toEqual({
+      dshPath: null,
+      nodePath: null,
+      rootPath: null,
+    });
+    expect(parseRuntimeProbe('garbage\r\ndsh=/opt/dsh\r\n')).toEqual({
+      dshPath: '/opt/dsh',
+      nodePath: null,
+      rootPath: null,
+    });
+    // The canonical isolation root is reported by the same probe (issue #12).
+    expect(parseRuntimeProbe('root=/home/u/.local/share/wsl-web-shell\ndsh=/home/u/.local/share/wsl-web-shell/runtime/bin/dsh\n')).toEqual({
+      dshPath: '/home/u/.local/share/wsl-web-shell/runtime/bin/dsh',
+      nodePath: null,
+      rootPath: '/home/u/.local/share/wsl-web-shell',
+    });
   });
 });
 

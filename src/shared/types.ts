@@ -66,6 +66,12 @@ export interface ShellStatus {
    * known (or when it cannot be queried). Informational only.
    */
   dshVersion: string | null;
+  /**
+   * Executable the launcher resolved inside the distribution, `null` before the
+   * first successful start. Used to decide whether an update may replace the
+   * isolated runtime (issue #12).
+   */
+  dshPath: string | null;
   updatedAt: string;
 }
 
@@ -93,6 +99,36 @@ export interface VersionSnapshot {
   error: string | null;
   /** True when the upstream release is strictly newer than the installed one. */
   updateAvailable: boolean;
+}
+
+/**
+ * What the update confirmation window shows (issue #12). It is a snapshot: the
+ * window renders it and never queries WSL itself.
+ */
+export interface UpdateProbe {
+  /** Version currently in use, `null` while unknown. */
+  installed: string | null;
+  /** Exact published version the update would install. */
+  target: string | null;
+  distro: string;
+  /** Isolated runtime root that would be replaced. */
+  runtimeRoot: string;
+  /** True when the update may be started; `reason` explains a refusal. */
+  eligible: boolean;
+  /** Machine-readable refusal code, `null` when eligible. */
+  reason: string | null;
+  /** Human-readable explanation for the window. */
+  description: string | null;
+  /** Directory that keeps the previous installation for rollback. */
+  rollbackPath: string | null;
+  /** True while an update is already running. */
+  running: boolean;
+}
+
+export interface UpdateStartResult {
+  started: boolean;
+  reason: string | null;
+  description: string | null;
 }
 
 export interface ConfigPatch {

@@ -141,6 +141,17 @@ jobs:
           "sha256=$hash" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           "$hash  $($exe.Name)" | Out-File -FilePath release/SHA256SUMS.txt -Encoding ascii
 
+      - name: Packaged relaunch check (issue #12)
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem release -Filter 'WSL-Web-Shell-*-x64.exe' | Select-Object -First 1
+          if (-not $exe) { throw 'portable EXE was not produced' }
+          $dir = Join-Path $env:RUNNER_TEMP 'relaunch-probe'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          Write-Host "probing $($exe.FullName)"
+          Start-Process -FilePath $exe.FullName -ArgumentList "--relaunch-probe=$dir" -Wait
+          node scripts/check-relaunch.cjs $dir $exe.FullName 180
+
       - name: Upload portable EXE
         uses: actions/upload-artifact@v4
         with:

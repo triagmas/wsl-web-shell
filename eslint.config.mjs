@@ -12,6 +12,7 @@ export default tseslint.config(
       'src/settings/**',
       'src/chrome/**',
       'src/popover/**',
+      'src/update/**',
     ],
   },
   js.configs.recommended,

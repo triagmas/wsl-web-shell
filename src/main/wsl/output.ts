@@ -34,6 +34,8 @@ export interface RuntimeProbe {
   dshPath: string | null;
   /** Absolute path of the node binary used by the launcher PATH. */
   nodePath: string | null;
+  /** Canonical (symlink-resolved) isolation root, null when isolation is off. */
+  rootPath: string | null;
 }
 
 function asAbsolutePath(value: string): string | null {
@@ -45,11 +47,12 @@ function asAbsolutePath(value: string): string | null {
 
 /** Parse the `dsh=`/`node=` lines printed by the read-only runtime probe. */
 export function parseRuntimeProbe(text: string): RuntimeProbe {
-  const probe: RuntimeProbe = { dshPath: null, nodePath: null };
+  const probe: RuntimeProbe = { dshPath: null, nodePath: null, rootPath: null };
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.replace(/\0/g, '').trim();
     if (line.startsWith('dsh=')) probe.dshPath = asAbsolutePath(line.slice(4));
     else if (line.startsWith('node=')) probe.nodePath = asAbsolutePath(line.slice(5));
+    else if (line.startsWith('root=')) probe.rootPath = asAbsolutePath(line.slice(5));
   }
   return probe;
 }

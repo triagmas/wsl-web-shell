@@ -119,6 +119,36 @@ behind it belongs to a dead backend session. Navigations are serialized through 
 single in-flight promise, so a recovery burst cannot race two loads; no substitute
 UI and no injected styles are involved, and DSH session state stays server-side.
 
+### One-click update (issue #12)
+
+The updater is the only component allowed to change what runs inside the isolation
+root, so it is split the same way as the launcher:
+
+- `src/main/core/update.ts` — pure: exact-version and exact-equality checks,
+  `isExpectedRuntimePath()` against the canonical root WSL reported,
+  `planUpdate()` (rejects global installs, custom executables, foreign runtimes,
+  unsafe roots), terminal buffer with a rolling-cap offset, phase model,
+  transaction journal and every recovery decision;
+- `src/main/wsl/update-args.ts` — argv construction and the five `/bin/sh` scripts
+  (npm lookup, stage, activate, restore, inspect), all sharing one prologue that
+  expands a configured `~` inside the script, canonicalises the root, refuses
+  symlinked components and pins npm to the private cache;
+- `src/main/core/update-runner.ts` — the fixed transaction (npm lookup → stage →
+  verify → **quiesce the owned backend** → swap → full start) with no retries and
+  no parallel runs;
+- `src/main/core/update-recovery.ts` — journal persistence and the start-up repair
+  (`finalize`, `rollback`, `blocked`);
+- `src/main/core/relaunch.ts` — pure decision about which executable may be
+  relaunched after an update;
+- `src/update/*` + `src/preload/update.ts` — the confirmation and terminal
+  windows, rendering only state pushed by the main process.
+
+The plan is recomputed in the main process for `update:start`; the confirmation
+window cannot start something `planUpdate()` rejected. The backend is stopped only
+immediately before the swap, with auto-recovery paused, and the update is reported
+as successful only after the new runtime passed a full start. Success then takes
+the same graceful shutdown path as Quit and relaunches the portable executable.
+
 ## Ownership
 
 A server counts as app-owned only when all of the following hold:
@@ -273,6 +303,15 @@ Issue #9 added `tests/footer.test.ts` (bar model, geometry, anchor validation),
 policy, offline fail-soft) and `tests/r09.test.ts` (composition guards). The
 workspace contract moved to `src/main/core/workspace.ts` so Settings and the
 launcher cannot disagree about a trailing slash (issue #8).
+
+Issue #12 added `tests/update.test.ts` (guards, exact version equality, ownership
+paths, rolling-cap streaming, journal and recovery decisions, the full runner
+transaction, portable relaunch, window/shutdown wiring) and
+`tests/wsl-update-args.test.ts`, which runs the shipped scripts under `/bin/sh`
+with a fake `$HOME` and a fake npm: `~/` expansion, the private cache, symlink
+refusal, substring version refusal, staging, activation, rollback and recovery
+from an interruption at both swap boundaries. `tests/supervisor.test.ts` covers
+the quiesce/resume contract. No test starts WSL or touches an installation.
 
 Configuration gained two fields: `isolateEnvironment` (default on) and
 `runtimeRoot`. Both require a backend restart, so the tray decision stays

@@ -30,11 +30,14 @@ dropped first, then the state word is shortened (`chrome.css` media queries).
 | `DSH <version>` | `dsh --version` inside the distro, read by the supervisor | `DSH —` until the backend has answered; never guessed |
 | `GitHub <version>` | `https://api.github.com/repos/deepseek-ai/deepseek-harness/releases` | newest published `dsh-v*` release; `GitHub …` while unknown |
 | `↑` | comparison of the two | shown only when upstream is strictly newer (SemVer precedence including pre-releases) |
+| `⟳ <version>` | same comparison, plus `planUpdate()` | pill with a circular arrow; **hidden unless** an update is available and installable, opens the update confirmation window (issue #12) |
 
 Rules:
 
-- The lookup is **informational only**. Nothing is downloaded, installed or upgraded,
-  and no request carries credentials or cookies.
+- The GitHub lookup is **informational only**: it downloads nothing and sends no
+  credentials or cookies. The only action it enables is the explicit, confirmed
+  update described in [update.md](update.md), which happens in the isolated runtime
+  and only when the user clicks Update.
 - Results are cached in `userData/versions-cache.json` for 18 h so a restart or a
   network outage never blocks or delays startup. A failed refresh keeps the last good
   version and only records a short error.

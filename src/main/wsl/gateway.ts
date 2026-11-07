@@ -1,6 +1,13 @@
 /** Real `wsl.exe` gateway used by the Electron main process. */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import type { WslGateway, ServerHandle, StartServerRequest, ExitInfo } from '../core/supervisor.js';
+import type {
+  WslGateway,
+  ServerHandle,
+  StartServerRequest,
+  ExitInfo,
+  UpdateRunResult,
+} from '../core/supervisor.js';
+import type { RuntimeObservation } from '../core/update.js';
 import { ShellError } from '../core/supervisor.js';
 import type { Logger } from '../core/logger.js';
 import type { ProcessProbe } from './output.js';
@@ -26,6 +33,16 @@ import {
   buildSignalArgs,
   buildStartServerArgs,
 } from './args.js';
+import {
+  buildActivateArgs,
+  buildInspectArgs,
+  buildNpmViewArgs,
+  buildRestoreArgs,
+  buildStageArgs,
+  NPM_MARKER,
+  parseInspectLine,
+  parseNpmMarker,
+} from './update-args.js';
 
 export interface CommandResult {
   code: number | null;
@@ -93,6 +110,60 @@ export function createWslGateway(options: WslGatewayOptions): WslGateway {
       });
     });
 
+  /**
+   * Run one long updater step, streaming every line to the modal window.
+   *
+   * The child gets no TTY and its output is treated as data: escapes and secrets
+   * are removed by the terminal buffer, while the last lines are kept here so a
+   * failure can explain itself.
+   */
+  const spawnStreaming = (
+    argv: string[],
+    onLine: (line: string) => void,
+    label: string,
+  ): Promise<UpdateRunResult> =>
+    new Promise((resolve) => {
+      let child: ChildProcessWithoutNullStreams;
+      try {
+        child = spawnImpl(wslExe, argv, {
+          windowsHide: true,
+          stdio: ['ignore', 'pipe', 'pipe'],
+          env: { ...process.env, WSL_UTF8: '1' },
+        }) as unknown as ChildProcessWithoutNullStreams;
+      } catch (error) {
+        options.log.error(`${label} failed to spawn: ${error instanceof Error ? error.message : 'unknown'}`);
+        resolve({ code: null, tail: `${label} could not be started.` });
+        return;
+      }
+      const stdoutBuffer = new LineBuffer();
+      const stderrBuffer = new LineBuffer();
+      const tail: string[] = [];
+      const emit = (line: string): void => {
+        const clean = stripAnsi(line);
+        if (clean.trim() === '') return;
+        tail.push(clean);
+        if (tail.length > 20) tail.shift();
+        onLine(clean);
+      };
+      child.stdout.setEncoding('utf8');
+      child.stderr.setEncoding('utf8');
+      child.stdout.on('data', (chunk: string) => {
+        for (const line of stdoutBuffer.push(chunk)) emit(line);
+      });
+      child.stderr.on('data', (chunk: string) => {
+        for (const line of stderrBuffer.push(chunk)) emit(line);
+      });
+      child.once('error', (error: NodeJS.ErrnoException) => {
+        options.log.error(`${label} error: ${error.code ?? error.message}`);
+        resolve({ code: null, tail: tail.slice(-2).join(' ') || `${label} failed to start.` });
+      });
+      child.once('close', (code) => {
+        for (const line of stdoutBuffer.flush()) emit(line);
+        for (const line of stderrBuffer.flush()) emit(line);
+        resolve({ code, tail: tail.slice(-2).join(' ') });
+      });
+    });
+
   const ensureSuccess = (result: CommandResult, message: string): CommandResult => {
     if (result.code !== 0) {
       const detail = (result.stderr || result.stdout).trim().split('\n').slice(-2).join(' ');
@@ -151,7 +222,7 @@ export function createWslGateway(options: WslGatewayOptions): WslGateway {
         const check = await run(buildDshPathCheckArgs(distro, override), 20_000);
         if (check.code === 0) {
           options.log.info(`dsh (configured): ${override}`);
-          return { dshPath: override, nodePath: probe.nodePath };
+          return { dshPath: override, nodePath: probe.nodePath, canonicalRoot: probe.rootPath };
         }
         throw new ShellError(
           'dsh-missing',
@@ -172,7 +243,8 @@ export function createWslGateway(options: WslGatewayOptions): WslGateway {
         throw new ShellError('dsh-missing', 'The detected DeepSeek Harness CLI is not executable.', 'Set the executable path in Settings.');
       }
       options.log.info(`dsh resolved: ${probe.dshPath}`);
-      return { dshPath: probe.dshPath, nodePath: probe.nodePath };
+      if (probe.rootPath !== null) options.log.info(`isolation root (canonical): ${probe.rootPath}`);
+      return { dshPath: probe.dshPath, nodePath: probe.nodePath, canonicalRoot: probe.rootPath };
     },
 
     startServer(request: StartServerRequest): ServerHandle {
@@ -254,6 +326,102 @@ export function createWslGateway(options: WslGatewayOptions): WslGateway {
         },
         stderrTail: () => stderrTail,
       };
+    },
+
+    async checkPublishedVersion(request) {
+      const result = await run(
+        buildNpmViewArgs({
+          distro: request.distro,
+          isolationRoot: request.isolationRoot,
+          version: request.version,
+          nodePath: request.nodePath,
+        }),
+        120_000,
+      );
+      const lines = `${result.stdout}\n${result.stderr}`.split('\n');
+      const npmPath = lines.map((line) => parseNpmMarker(line)).find((value) => value !== null) ?? null;
+      const reported = parseDshVersion(lines.filter((line) => !line.includes(NPM_MARKER)).join('\n'));
+      if (npmPath === null) {
+        return {
+          found: false,
+          npmPath: null,
+          reported: null,
+          message: 'npm was not found in this distribution, so nothing can be verified or installed.',
+        };
+      }
+      if (result.code !== 0 || reported === null) {
+        const detail = (result.stderr || result.stdout)
+          .split('\n')
+          .filter((line) => !line.includes(NPM_MARKER))
+          .map((line) => line.trim())
+          .filter((line) => line !== '')
+          .slice(-1)
+          .join(' ');
+        return {
+          found: false,
+          npmPath,
+          reported,
+          message: detail === '' ? 'npm did not report this version.' : detail,
+        };
+      }
+      return { found: reported === request.version, npmPath, reported, message: null };
+    },
+
+    async stageRuntime(request, onLine) {
+      const argv = buildStageArgs(
+        {
+          distro: request.distro,
+          isolationRoot: request.isolationRoot,
+          version: request.version,
+          nodePath: request.nodePath,
+        },
+        request.npmPath,
+        request.transaction,
+      );
+      options.log.info(`staging DSH ${request.version} (distro=${request.distro}, tx=${request.transaction})`);
+      return await spawnStreaming(argv, onLine, 'the update process');
+    },
+
+    async activateRuntime(request, onLine) {
+      const argv = buildActivateArgs(
+        {
+          distro: request.distro,
+          isolationRoot: request.isolationRoot,
+          version: request.version,
+          nodePath: request.nodePath,
+        },
+        request.transaction,
+      );
+      options.log.info(`activating DSH ${request.version} (tx=${request.transaction})`);
+      return await spawnStreaming(argv, onLine, 'the activation process');
+    },
+
+    async restoreRuntime(request, onLine) {
+      const argv = buildRestoreArgs(request.distro, request.isolationRoot, request.transaction, request.nodePath);
+      options.log.warn(`restoring the previous DSH installation (tx=${request.transaction})`);
+      return await spawnStreaming(argv, onLine, 'the rollback process');
+    },
+
+    async inspectRuntime(distro, isolationRoot) {
+      const result = await run(buildInspectArgs(distro, isolationRoot), 30_000);
+      const report: RuntimeObservation = {
+        runtimePresent: false,
+        runtimeVersion: null,
+        previous: null,
+        stage: null,
+      };
+      for (const line of `${result.stdout}\n${result.stderr}`.split('\n')) {
+        const entry = parseInspectLine(line);
+        if (entry === null) continue;
+        if (entry.key === 'runtime') report.runtimePresent = entry.value === 'present';
+        else if (entry.key === 'version') report.runtimeVersion = entry.value === '' ? null : entry.value;
+        else if (entry.key === 'previous') report.previous = entry.value;
+        else if (entry.key === 'stage') report.stage = entry.value;
+      }
+      if (result.code !== 0) {
+        options.log.warn(`runtime inspection failed (code=${result.code ?? 'null'})`);
+      }
+      return report;
     },
 
     async dshVersion(distro: string, dshPath: string, nodePath: string | null = null): Promise<string | null> {
