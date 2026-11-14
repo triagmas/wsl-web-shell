@@ -52,9 +52,10 @@ your normal `~/.dsh` data as well.
 **Your own WSL, your own data.** Agents, models, tools and project files stay inside
 your Linux distribution. DSH WSL never silently changes WSL, Node.js or a globally
 installed `dsh`, and it never touches the official Windows DeepSeek Harness installation
-or your projects. It does not update anything either: when a newer release exists it
-shows the installed and available version and the exact commands to run in your WSL
-terminal.
+or your projects. It does not update anything by itself: when a newer release exists it shows the
+installed and available version and the exact commands, and one button runs those same
+commands in a visible WSL console where `sudo` can ask you for your password — you watch
+it, and the app never sees the password.
 
 **A window that behaves like an app.**
 

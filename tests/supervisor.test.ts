@@ -524,6 +524,57 @@ describe('external backend expectation (boot race)', () => {
     expect(harness.wsl.keepalives).toEqual(['Ubuntu']);
   });
 
+  it('pauses for a console update and does not resurrect the stopped backend', async () => {
+    let alive = true;
+    const harness = createHarness({
+      wsl: { probe: (pid) => (alive && pid === BACKEND_PID ? backendProbe() : null) },
+    });
+    harness.wsl.signalHook = (_pid, signal) => {
+      if (signal === 'TERM') alive = false;
+    };
+    harness.wsl.startHook = () => {
+      alive = true;
+    };
+    const supervisor = new Supervisor(harness.deps);
+    await supervisor.start();
+    const startsBefore = harness.wsl.starts.length;
+
+    // The app stops its own backend through the ownership-proven path, so the
+    // console never needs a `kill` line for a process it did not start.
+    await supervisor.suspendForUpdate();
+    expect(harness.wsl.signals).toEqual([{ pid: BACKEND_PID, signal: 'TERM' }]);
+
+    // The exit that follows is part of the update, not an accident: recovery,
+    // health checks and the hand-back decision must all stay quiet while the
+    // console owns the backend (beta.6 EADDRINUSE).
+    await supervisor.handleServerExit({ code: 0, signal: null }, 1);
+    await supervisor.healthTick();
+    expect(harness.wsl.starts).toHaveLength(startsBefore);
+    expect(harness.wsl.keepalives).toEqual([]);
+  });
+
+  it('resumes after the console update and brings the backend back', async () => {
+    let alive = true;
+    const harness = createHarness({
+      wsl: { probe: (pid) => (alive && pid === BACKEND_PID ? backendProbe() : null) },
+    });
+    harness.wsl.signalHook = (_pid, signal) => {
+      if (signal === 'TERM') alive = false;
+    };
+    harness.wsl.startHook = () => {
+      alive = true;
+    };
+    const supervisor = new Supervisor(harness.deps);
+    await supervisor.start();
+    const startsBefore = harness.wsl.starts.length;
+
+    await supervisor.suspendForUpdate();
+    await supervisor.resumeAfterUpdate();
+
+    expect(harness.wsl.starts.length).toBe(startsBefore + 1);
+    expect(supervisor.state).toBe('READY');
+  });
+
   it('re-arms the distribution keepalive when whatever held WSL open is gone', async () => {
     const EXTERNAL_PID = 4711;
     let keeperAlive = true;

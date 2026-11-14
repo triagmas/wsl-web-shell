@@ -255,6 +255,16 @@ export class Supervisor {
    * with it - the exact chain that ended two WebUI sessions on 2026-11-14.
    */
   private keepalivePid: number | null = null;
+
+  /**
+   * A console update owns the backend right now.
+   *
+   * While set, the app must not fight the update: no recovery, no hand-back, no
+   * keepalive decision that starts or stops anything (the beta.6 EADDRINUSE bug
+   * was exactly a supervisor racing a package swap). Only the two public methods
+   * below change it.
+   */
+  private pausedForUpdate = false;
   /**
    * The profile expects this port to be served by a backend the owner started
    * (a previous attach succeeded). While true the app waits for that backend
@@ -447,6 +457,46 @@ export class Supervisor {
   }
 
   /**
+   * Pause the supervisor because a console update owns the backend.
+   *
+   * The app stops its own backend here, through the existing ownership-proven
+   * path, so the console never needs a `kill` line for a process it did not
+   * start. An attached backend is left alone: the console's own unit commands
+   * own it.
+   */
+  suspendForUpdate(): Promise<void> {
+    return this.serial(async () => {
+      if (this.pausedForUpdate || this.quitting) return;
+      this.pausedForUpdate = true;
+      this.deps.log.info('supervisor paused for the console update');
+      await this.stopOwnedServer();
+    });
+  }
+
+  /**
+   * Resume after a console update, whatever its outcome.
+   *
+   * Runs the ordinary bring-up path: it re-attaches to the restarted unit or
+   * starts an app-owned backend again. A failure here is logged, not escalated:
+   * the owner already sees the console result, and the health loop continues.
+   */
+  resumeAfterUpdate(): Promise<void> {
+    return this.serial(async () => {
+      if (!this.pausedForUpdate) return;
+      this.pausedForUpdate = false;
+      this.deps.log.info('supervisor resumed after the console update');
+      this.failures = 0;
+      this.attempt = 0;
+      if (this.quitting) return;
+      try {
+        await this.bringUp();
+      } catch (error) {
+        this.deps.log.error(`could not restart the backend after the update: ${describe(error)}`);
+      }
+    });
+  }
+
+  /**
    * Read-only unit of the backend the app is attached to.
    *
    * The manual update window names that unit in the commands it shows, so the
@@ -478,6 +528,7 @@ export class Supervisor {
 
   /** Health tick driven by the main process (visible ~10 s, hidden ~25 s). */
   async healthTick(): Promise<void> {
+    if (this.pausedForUpdate) return;
     const state = this.lifecycle.state;
     if (state !== 'READY' && state !== 'HIDDEN_IN_TRAY') return;
     const origin = buildOrigin(this.port());
@@ -534,6 +585,12 @@ export class Supervisor {
    * a failing health tick for the same process) produce one loop (issue #24).
    */
   private async handleLoss(reason: string): Promise<void> {
+    if (this.pausedForUpdate) {
+      // The stop belonged to the update, not to an accident: the console is
+      // about to install and start the service again.
+      this.deps.log.debug(`loss ignored (${reason}): a console update owns the backend`);
+      return;
+    }
     if (this.recoveryRunning || this.recoveryScheduled || this.quitting) return;
     if (this.attached) {
       // The backend belongs to its own launcher, so the app must not signal or
@@ -1110,7 +1167,7 @@ export class Supervisor {
    * is logged and retried on the next healthy tick rather than escalated.
    */
   private async repairDistroKeepalive(): Promise<void> {
-    if (!this.attached) return;
+    if (!this.attached || this.pausedForUpdate) return;
     const alive = this.deps.keepaliveAlive ?? isProcessAlive;
     if (this.keepalivePid !== null && alive(this.keepalivePid)) return;
     if (this.keepalivePid !== null) {
@@ -1151,6 +1208,7 @@ export class Supervisor {
    * backend keeps serving.
    */
   private async maybeHandBack(): Promise<void> {
+    if (this.pausedForUpdate) return;
     if (this.quitting || this.attached || !this.owned) return;
     if (!this.externalExpected || this.handBackRunning) return;
     const config = this.deps.config();

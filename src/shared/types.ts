@@ -139,6 +139,23 @@ export interface UpdateProbe {
   description: string | null;
   /** `installed` and `target` agree, differ, or cannot be compared. */
   state: 'pending' | 'installed' | 'unknown';
+  /** The whole list can run as one script in a visible WSL console. */
+  runAvailable: boolean;
+}
+
+/** What one console update changed, as the update window reports it. */
+export interface UpdateRunResult {
+  /** The installation reports the published version afterwards. */
+  success: boolean;
+  /** Console exit code, `null` when the console could not be started. */
+  code: number | null;
+  installed: string | null;
+  target: string | null;
+  /** Log path inside WSL, shown to the owner. */
+  logPath: string;
+  /** The same install line with the previous version, ready to copy. */
+  rollbackCommand: string | null;
+  message: string;
 }
 
 export interface ConfigPatch {

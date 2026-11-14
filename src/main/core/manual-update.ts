@@ -1,15 +1,16 @@
 /**
  * Manual update instructions (owner decision, issue #12 follow-up).
  *
- * DSH WSL no longer updates the DeepSeek Harness installation itself: it only
- * reports the installed and the published version and, when they differ, the
- * commands the owner runs in a WSL terminal. Nothing here starts, stops or
- * installs anything — the strings are display data, and the renderer copies them
- * to the clipboard.
+ * DSH WSL does not update the DeepSeek Harness installation itself: it reports
+ * the installed and the published version and, when they differ, the commands.
+ * The owner either copies them into a WSL terminal or lets the app run the same
+ * list in a visible console (see `update-console.ts`). Nothing here starts,
+ * stops or installs anything — the strings are display data and script input.
  *
  * Pure module: no fs, no Electron, no process spawning.
  */
 import type { DshInstallation } from './dsh-locate.js';
+import { compareSemver } from './versions.js';
 
 /** The npm package the manual command installs. */
 export const DSH_PACKAGE = '@deepseek-ai/dsh';
@@ -47,9 +48,6 @@ function isSafePath(value: unknown): value is string {
   return typeof value === 'string' && value.length <= 300 && SAFE_PATH.test(value);
 }
 
-/** A pid may appear in a command only as plain digits. */
-const SAFE_PID = /^[1-9][0-9]{0,6}$/;
-
 /** Which systemd unit serves the backend the app is attached to. */
 export interface ManualUpdateUnit {
   scope: 'system' | 'user';
@@ -74,8 +72,6 @@ export interface ManualUpdateInput {
   backend: ManualUpdateBackend;
   /** Unit of an attached backend, `null` when it has none or is unknown. */
   unit: ManualUpdateUnit | null;
-  /** Pid of the backend this app started, `null` when unknown. */
-  ownedPid?: number | null;
 }
 
 export type ManualUpdateState = 'pending' | 'installed' | 'unknown';
@@ -88,6 +84,12 @@ export interface ManualUpdatePlan {
   commands: string[];
   /** Explanation shown instead of, or beside, the commands. */
   description: string | null;
+  /**
+   * True when the whole command list can run as one script in a visible WSL
+   * console: the app stops its own backend itself, or the attached backend has
+   * exactly one system unit to stop and start.
+   */
+  runInConsole: boolean;
 }
 
 /**
@@ -99,18 +101,36 @@ export interface ManualUpdatePlan {
  * and prefix are therefore named explicitly whenever both are known and safe to
  * quote; otherwise the plain form is used.
  */
-function installCommand(installation: DshInstallation, version: string): string | null {
+export function buildInstallCommand(installation: DshInstallation, version: string): string | null {
+  if (!isExactVersion(version)) return null;
+  // A prefix owned by root cannot be written by the package manager under the
+  // owner's account, so the line itself has to run as root; `env` keeps the PATH
+  // the manager needs for its own shims.
+  const root = installation.writable ? '' : 'sudo env "PATH=$PATH" ';
   if (installation.manager === 'npm') {
     const npm = isSafePath(installation.npmPath) ? `"${installation.npmPath}"` : 'npm';
     const prefix = isSafePath(installation.prefix) ? ` --prefix "${installation.prefix}"` : '';
-    return `${npm} install -g${prefix} ${DSH_PACKAGE}@${version}`;
+    return `${root}${npm} install -g${prefix} ${DSH_PACKAGE}@${version}`;
   }
-  if (installation.manager === 'pnpm') return `pnpm add -g ${DSH_PACKAGE}@${version}`;
+  if (installation.manager === 'pnpm') return `${root}pnpm add -g ${DSH_PACKAGE}@${version}`;
   return null;
 }
 
 function unknown(installed: string | null, description: string): ManualUpdatePlan {
-  return { installed, state: 'unknown', commands: [], description };
+  return { installed, state: 'unknown', commands: [], description, runInConsole: false };
+}
+
+/**
+ * Root note for the cases where npm cannot write the prefix by itself.
+ *
+ * The note is part of every pending branch, not only the system-unit one: an
+ * unwritable global prefix fails the install the same way wherever the stop
+ * command came from.
+ */
+function rootNote(installation: DshInstallation): string {
+  return installation.writable
+    ? ''
+    : ' The global prefix is not writable by your user, so the install needs root.';
 }
 
 /**
@@ -153,10 +173,23 @@ export function buildManualUpdatePlan(input: ManualUpdateInput): ManualUpdatePla
       state: 'installed',
       commands: [],
       description: `${DSH_PACKAGE} ${installed} is installed.`,
+      runInConsole: false,
+    };
+  }
+  // Downgrade guard: the published release may be older than what is installed
+  // (a prerelease, a local build, a channel change). Installing it backwards is
+  // never what "update" means, so the plan stays silent instead of offering it.
+  if (compareSemver(target, installed) <= 0) {
+    return {
+      installed,
+      state: 'installed',
+      commands: [],
+      description: `${DSH_PACKAGE} ${installed} is installed, which is already newer than the published ${target}.`,
+      runInConsole: false,
     };
   }
 
-  const install = installCommand(input.installation, target);
+  const install = buildInstallCommand(input.installation, target);
   if (install === null) {
     return unknown(
       installed,
@@ -165,23 +198,19 @@ export function buildManualUpdatePlan(input: ManualUpdateInput): ManualUpdatePla
   }
 
   if (input.backend === 'owned') {
-    // Quit does not stop this backend: its lifetime follows the WSL distribution.
-    // Telling the owner to quit would leave the installation in use while npm
-    // replaces the files it executes.
-    const pid = typeof input.ownedPid === 'number' && SAFE_PID.test(String(input.ownedPid)) ? input.ownedPid : null;
-    // The wait is part of the line so "Copy all" cannot start npm before the
-    // process that runs those files is gone. If it ignores SIGTERM the owner has
-    // to stop it himself; the description says so.
-    const stop = pid === null ? [] : [`kill ${pid}; sleep 2`];
+    // Quit does not stop this backend: its lifetime follows the WSL distribution,
+    // so the app stops it itself (ownership-proven) before the console runs. No
+    // `kill` line belongs in a command list the owner may also run by hand: a
+    // stale pid is worse than no line at all.
     return {
       installed,
       state: 'pending',
-      commands: [...stop, install],
+      commands: [install],
       description:
-        pid === null
-          ? 'The backend this app started is still using the installation. Stop it in a WSL terminal first, then run the command.'
-          : `The backend this app started (pid ${pid}) keeps running after you quit the app, so the first line stops it and waits two seconds. ` +
-            'If it is still running after that, stop it yourself before installing.',
+        'The app stops its own backend before running this in the console, because quitting leaves that backend running.' +
+        ' If you run the command yourself, stop that backend first.' +
+        rootNote(input.installation),
+      runInConsole: true,
     };
   }
 
@@ -191,7 +220,9 @@ export function buildManualUpdatePlan(input: ManualUpdateInput): ManualUpdatePla
       state: 'pending',
       commands: [install],
       description:
-        'The systemd unit that runs the DeepSeek Harness serving this window could not be identified reliably. Stop that process yourself, run the command, then start it again.',
+        'The systemd unit that runs the DeepSeek Harness serving this window could not be identified reliably. Stop that process yourself, run the command, then start it again.' +
+        rootNote(input.installation),
+      runInConsole: false,
     };
   }
 
@@ -205,13 +236,14 @@ export function buildManualUpdatePlan(input: ManualUpdateInput): ManualUpdatePla
         install,
         `${prefix} start ${input.unit.name}`,
       ],
-      // The app is told to be closed first: while it runs it treats the unit
-      // going away as a lost backend and starts its own, which then runs from the
-      // installation npm is replacing.
+      // The app pauses itself for the run: while it runs it treats the unit going
+      // away as a lost backend and would start its own from the installation npm
+      // is replacing (the beta.6 EADDRINUSE bug).
       description:
-        `Close DSH WSL first (Tray → Quit); quitting does not stop ${input.unit.name}. Then run these commands in a WSL terminal: ` +
-        'they stop it, install the exact version, and start it again.' +
-        (input.installation.writable ? '' : ' The global prefix is not writable by your user, so the install needs root.'),
+        `Run in the console and the app pauses itself, stops ${input.unit.name}, installs ${target}, and starts it again. ` +
+        'You can also run these lines yourself in a WSL terminal.' +
+        rootNote(input.installation),
+      runInConsole: input.unit.scope === 'system',
     };
   }
 
@@ -221,7 +253,9 @@ export function buildManualUpdatePlan(input: ManualUpdateInput): ManualUpdatePla
       state: 'pending',
       commands: [install],
       description:
-        'The DeepSeek Harness serving this window was not started by systemd. Stop that process yourself, run the command, then start it again.',
+        'The DeepSeek Harness serving this window was not started by systemd, so the app cannot stop and start it safely. Stop that process yourself, run the command, then start it again.' +
+        rootNote(input.installation),
+      runInConsole: false,
     };
   }
 
@@ -229,6 +263,7 @@ export function buildManualUpdatePlan(input: ManualUpdateInput): ManualUpdatePla
     installed,
     state: 'pending',
     commands: [install],
-    description: 'Run this in a WSL terminal, then start the backend again.',
+    description: 'No backend is running. The console installs the exact version and reports the result.' + rootNote(input.installation),
+    runInConsole: true,
   };
 }

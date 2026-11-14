@@ -1,7 +1,7 @@
 {
   "name": "wsl-web-shell",
   "productName": "DSH WSL",
-  "version": "0.1.0",
+  "version": "0.1.0-beta.13",
   "private": true,
   "description": "Standalone Windows Electron shell for WebUIs served by native WSL2 distributions",
   "license": "MIT",

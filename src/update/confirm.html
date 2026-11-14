@@ -10,8 +10,8 @@
     <main>
       <h1>DeepSeek Harness update</h1>
       <p class="lead">
-        DSH WSL does not change the installation itself. It reports the version it found and the exact commands you run
-        in a WSL terminal.
+        DSH WSL reports the version it found and the exact commands. You can run them yourself in a WSL terminal, or
+        let the app run the same lines in a visible console window where <code>sudo</code> asks for your password.
       </p>
 
       <dl class="facts">
@@ -43,9 +43,23 @@
 
       <p class="copied" id="copied" role="status" aria-live="polite"></p>
 
+      <section class="result" id="result" hidden>
+        <h2 id="result-title">Update result</h2>
+        <p id="result-message"></p>
+        <p class="hint" id="result-log" hidden></p>
+        <div class="rollback" id="rollback" hidden>
+          <p class="hint">If you want to go back to the previous version, run this line in a WSL console:</p>
+          <div class="command-row">
+            <code id="rollback-command"></code>
+            <button type="button" id="copy-rollback" class="secondary small">Copy</button>
+          </div>
+        </div>
+      </section>
+
       <div class="actions">
         <button type="button" id="close" class="secondary">Close</button>
         <button type="button" id="recheck" class="primary">Check again</button>
+        <button type="button" id="run-console" class="primary" hidden>Run in WSL console</button>
       </div>
     </main>
     <script src="confirm.js"></script>

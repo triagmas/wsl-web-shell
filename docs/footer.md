@@ -30,7 +30,7 @@ dropped first, then the state word is shortened (`chrome.css` media queries).
 | `DSH <version>` | `dsh --version` inside the distro, read by the supervisor | `DSH —` until the backend has answered; never guessed |
 | `GitHub <version>` | `https://api.github.com/repos/deepseek-ai/deepseek-harness/releases` | newest published `dsh-v*` release; `GitHub …` while unknown |
 | `↑` | comparison of the two | shown only when upstream is strictly newer (SemVer precedence including pre-releases) |
-| `⟳ <version>` | same comparison | pill with a circular arrow; **hidden unless** a newer release is published, opens the manual update window (issue #12) |
+| `⟳ <version>` | same comparison | pill with a circular arrow; **hidden unless** a newer release is published, opens the update window (issue #12; commands or one **Run in WSL console** button) |
 
 Rules:
 

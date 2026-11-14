@@ -11,6 +11,7 @@ import type { DshInstallation } from '../src/main/core/dsh-locate.js';
 import {
   DSH_PACKAGE,
   buildManualUpdatePlan,
+  type ManualUpdateUnit,
   isExactVersion,
   isSameVersion,
   isValidUnitName,
@@ -118,19 +119,20 @@ describe('manual update commands', () => {
     expect(plan.description).toContain('not started by systemd');
   });
 
-  it('names the pid of its own backend instead of telling the owner to quit', () => {
-    // Quit deliberately leaves that backend running, so "quit the app" would
-    // leave the installation in use while npm replaces the files it executes.
+  it('leaves stopping its own backend to the app instead of showing a kill line', () => {
+    // A `kill <pid>; sleep 2` line ages badly: the pid is stale by the time the
+    // owner copies it, and killing a recycled pid is worse than not stopping.
+    // The app stops its own backend through the ownership-proven path.
     const plan = buildManualUpdatePlan({
       installation: installation(),
       target: '0.2.2',
       backend: 'owned',
       unit: null,
-      ownedPid: 194,
     });
-    expect(plan.commands).toEqual(['kill 194; sleep 2', `"/usr/bin/npm" install -g --prefix "/home/triag/.npm-global" ${DSH_PACKAGE}@0.2.2`]);
-    expect(plan.description).toContain('194');
-    expect(plan.description).not.toContain('Quit');
+    expect(plan.commands).toEqual([`"/usr/bin/npm" install -g --prefix "/home/triag/.npm-global" ${DSH_PACKAGE}@0.2.2`]);
+    expect(plan.commands.some((line) => line.startsWith('kill '))).toBe(false);
+    expect(plan.description).toContain('stops its own backend');
+    expect(plan.runInConsole).toBe(true);
   });
 
   it('shows no command when the published version could not be checked', () => {
@@ -148,7 +150,7 @@ describe('manual update commands', () => {
     expect(plan.description).toContain('upstream lookup timed out');
   });
 
-  it('says the install needs root when the prefix is not writable', () => {
+  it('runs the install as root when the prefix is not writable', () => {
     const plan = buildManualUpdatePlan({
       installation: installation({ writable: false }),
       target: '0.2.2',
@@ -156,19 +158,21 @@ describe('manual update commands', () => {
       unit: { scope: 'system', name: 'dsh-web.service' },
     });
     expect(plan.description).toContain('needs root');
-    // The command is not escalated: npm as root is the owner's decision, not ours.
-    expect(plan.commands.some((line) => line.startsWith('sudo') && line.includes('install'))).toBe(false);
+    expect(plan.commands[1]).toBe(
+      `sudo env "PATH=$PATH" "/usr/bin/npm" install -g --prefix "/home/triag/.npm-global" ${DSH_PACKAGE}@0.2.2`,
+    );
   });
 
-  it('never stops a backend the app started itself without a known pid', () => {
-    const plan = buildManualUpdatePlan({
-      installation: installation(),
-      target: '0.2.2',
-      backend: 'owned',
-      unit: null,
-    });
-    expect(plan.commands).toEqual([`"/usr/bin/npm" install -g --prefix "/home/triag/.npm-global" ${DSH_PACKAGE}@0.2.2`]);
-    expect(plan.description).toContain('still using the installation');
+  it('offers the console only where the app can stop and start the backend itself', () => {
+    const plan = (backend: 'owned' | 'attached' | 'none', unit: ManualUpdateUnit | null) =>
+      buildManualUpdatePlan({ installation: installation(), target: '0.2.2', backend, unit, });
+    expect(plan('owned', null).runInConsole).toBe(true);
+    expect(plan('none', null).runInConsole).toBe(true);
+    expect(plan('attached', { scope: 'system', name: 'dsh-web.service' }).runInConsole).toBe(true);
+    // A user unit is out of scope for the console: the app never manages it, and
+    // a hand-started backend has nothing to stop.
+    expect(plan('attached', { scope: 'user', name: 'dsh-web.service' }).runInConsole).toBe(false);
+    expect(plan('attached', null).runInConsole).toBe(false);
   });
 
   it('shows only the install line when no backend is running', () => {
@@ -179,7 +183,7 @@ describe('manual update commands', () => {
       unit: null,
     });
     expect(plan.commands).toEqual([`"/usr/bin/npm" install -g --prefix "/home/triag/.npm-global" ${DSH_PACKAGE}@0.2.2`]);
-    expect(plan.description).toContain('start the backend again');
+    expect(plan.description).toContain('No backend is running');
   });
 
   it('drops a unit name that does not pass the guard', () => {
@@ -191,6 +195,19 @@ describe('manual update commands', () => {
     });
     expect(plan.commands).toEqual([`"/usr/bin/npm" install -g --prefix "/home/triag/.npm-global" ${DSH_PACKAGE}@0.2.2`]);
     expect(plan.description).toContain('could not be identified reliably');
+  });
+
+  it('never offers a downgrade when the published version is older', () => {
+    const plan = buildManualUpdatePlan({
+      installation: installation({ version: '0.3.0' }),
+      target: '0.2.2',
+      backend: 'none',
+      unit: null,
+    });
+    expect(plan.state).toBe('installed');
+    expect(plan.commands).toEqual([]);
+    expect(plan.runInConsole).toBe(false);
+    expect(plan.description).toContain('newer');
   });
 
   it('reports the installed state and no command when the versions agree', () => {

@@ -3,9 +3,10 @@
 /**
  * Manual update window (issue #12 follow-up).
  *
- * The main process did the read-only inspection; this page only renders it and
- * lets the owner copy the commands. It never asks for a password and never starts
- * a process: the update itself happens in the owner's WSL terminal.
+ * The main process did the read-only inspection; this page renders it, lets the
+ * owner copy the commands, and offers the one action that runs them in a visible
+ * WSL console. The page never asks for a password and never executes anything
+ * itself: the console window owns the prompts and the output.
  */
 const installedEl = document.getElementById('installed');
 const targetEl = document.getElementById('target');
@@ -20,6 +21,16 @@ const copyAllButton = document.getElementById('copy-all');
 const copiedEl = document.getElementById('copied');
 const recheckButton = document.getElementById('recheck');
 const closeButton = document.getElementById('close');
+const runButton = document.getElementById('run-console');
+const resultEl = document.getElementById('result');
+const resultTitleEl = document.getElementById('result-title');
+const resultMessageEl = document.getElementById('result-message');
+const resultLogEl = document.getElementById('result-log');
+const rollbackEl = document.getElementById('rollback');
+const rollbackCommandEl = document.getElementById('rollback-command');
+const copyRollbackButton = document.getElementById('copy-rollback');
+
+let rollbackCommand = '';
 
 let commands = [];
 let copyStatusTimer = null;
@@ -98,6 +109,8 @@ function render(probe) {
   descriptionEl.hidden = probe.description === null || probe.description === '';
   descriptionEl.textContent = probe.description ?? '';
 
+  runButton.hidden = probe.runAvailable !== true || commands.length === 0;
+
   if (probe.state === 'installed') {
     statusEl.dataset.state = 'installed';
     statusEl.textContent = 'The installed version is current.';
@@ -108,6 +121,61 @@ function render(probe) {
   } else {
     statusEl.dataset.state = 'unknown';
     statusEl.textContent = 'The installed and published versions cannot be compared.';
+  }
+}
+
+/**
+ * Shows what the console did, and what to run to go back.
+ *
+ * The version the app read afterwards decides success, not the exit code: a
+ * console the owner closed reports a signal, and npm can fail after writing.
+ */
+function renderResult(result) {
+  resultEl.hidden = false;
+  resultEl.dataset.outcome = result.success ? 'success' : 'failure';
+  resultTitleEl.textContent = result.success ? 'Updated' : 'The update did not finish';
+  resultMessageEl.textContent = result.message;
+  resultLogEl.hidden = !result.logPath;
+  resultLogEl.textContent = result.logPath ? `Full output: ${result.logPath}` : '';
+  rollbackCommand = typeof result.rollbackCommand === 'string' ? result.rollbackCommand : '';
+  rollbackEl.hidden = rollbackCommand === '';
+  rollbackCommandEl.textContent = rollbackCommand;
+}
+
+async function runInConsole() {
+  const bridge = window.update;
+  if (bridge === undefined) return;
+  runButton.disabled = true;
+  recheckButton.disabled = true;
+  closeButton.disabled = true;
+  statusEl.dataset.state = 'checking';
+  statusEl.textContent = 'A console window is running the commands. Press Enter in that window when it finishes.';
+  announce('');
+  try {
+    const result = await bridge.run();
+    renderResult(result);
+    statusEl.dataset.state = result.success ? 'installed' : 'pending';
+    statusEl.textContent = result.success
+      ? 'The installed version is current.'
+      : 'The installation was not updated. See the console output.';
+    // Re-read rather than reusing the pre-run snapshot: the window also lists
+    // the commands, and they must match what is installed now.
+    const probe = await bridge.probe();
+    render(probe);
+  } catch (error) {
+    resultEl.hidden = false;
+    resultEl.dataset.outcome = 'failure';
+    resultTitleEl.textContent = 'The console could not be started';
+    resultMessageEl.textContent =
+      error instanceof Error && error.message !== '' ? error.message : 'The update did not run.';
+    resultLogEl.hidden = true;
+    rollbackEl.hidden = true;
+    statusEl.dataset.state = 'unknown';
+    statusEl.textContent = 'The update did not run.';
+  } finally {
+    runButton.disabled = false;
+    recheckButton.disabled = false;
+    closeButton.disabled = false;
   }
 }
 
@@ -136,6 +204,14 @@ copyAllButton.addEventListener('click', () => {
 
 recheckButton.addEventListener('click', () => {
   void load(true);
+});
+
+runButton.addEventListener('click', () => {
+  void runInConsole();
+});
+
+copyRollbackButton.addEventListener('click', () => {
+  if (rollbackCommand !== '') void copy(rollbackCommand);
 });
 
 closeButton.addEventListener('click', () => {

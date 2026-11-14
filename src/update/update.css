@@ -172,6 +172,55 @@ code {
   font-size: 12px;
 }
 
+.result {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.result[data-outcome="success"] {
+  border-color: color-mix(in srgb, var(--ok) 55%, transparent);
+}
+
+.result[data-outcome="failure"] {
+  border-color: color-mix(in srgb, var(--warn) 55%, transparent);
+}
+
+.result h2 {
+  margin: 0;
+  font-size: 13px;
+  color: var(--fg-strong);
+}
+
+.result p {
+  margin: 0;
+}
+
+.rollback {
+  display: grid;
+  gap: 6px;
+}
+
+.command-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  background: #070a10;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.command-row code {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
 .actions {
   margin-top: auto;
   display: flex;

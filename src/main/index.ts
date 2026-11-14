@@ -16,8 +16,10 @@ import {
   summarizePreviousSession,
 } from './core/diagnostics.js';
 import { createLatestVersionService } from './backend/github-versions.js';
-import { describeInstallScope, type SharedDshReport } from './core/dsh-locate.js';
-import { buildManualUpdatePlan } from './core/manual-update.js';
+import { describeInstallScope, type DshInstallation, type SharedDshReport } from './core/dsh-locate.js';
+import { buildManualUpdatePlan, type ManualUpdatePlan } from './core/manual-update.js';
+import { buildUpdateLogPath, buildUpdateResult, buildUpdateScript, planRunsInConsole } from './core/update-console.js';
+import { runInConsole } from './wsl/console.js';
 import { APP_DISPLAY_NAME, APP_ID, PROFILE_DIRECTORY } from './core/branding.js';
 import { createLogger } from './core/logger.js';
 import { isNewer } from './core/versions.js';
@@ -38,6 +40,7 @@ import type {
   ConfigPatch,
   ShellStatus,
   UpdateProbe,
+  UpdateRunResult,
   VersionSnapshot,
 } from '../shared/types.js';
 
@@ -249,7 +252,7 @@ async function bootstrap(): Promise<void> {
    * whether those commands include stopping and starting a unit, and only a
    * read-only probe supplies the unit name.
    */
-  async function updateProbe(force = false): Promise<UpdateProbe> {
+  async function updatePlan(force = false): Promise<{ probe: UpdateProbe; plan: ManualUpdatePlan; installation: DshInstallation | null }> {
     // "Check again" is an explicit request, so it must not wait out the 18-hour
     // cache: the owner pressed it because they expect a version published since
     // the last lookup to appear.
@@ -278,19 +281,72 @@ async function bootstrap(): Promise<void> {
       targetError: versions.snapshot().error,
       backend,
       unit,
-      ownedPid: backend === 'owned' ? supervisor.ownedBackendPid() : null,
     });
     return {
-      installed: plan.installed,
-      target,
-      distro: config.distro,
-      dshPath: installation?.path ?? runtime?.dshPath ?? status.dshPath,
-      installManager: installation?.manager ?? 'unknown',
-      installScope: installation === null ? 'unknown' : describeInstallScope(installation.prefix),
-      commands: plan.commands,
-      description: plan.description,
-      state: plan.state,
+      plan,
+      installation,
+      probe: {
+        installed: plan.installed,
+        target,
+        distro: config.distro,
+        dshPath: installation?.path ?? runtime?.dshPath ?? status.dshPath,
+        installManager: installation?.manager ?? 'unknown',
+        installScope: installation === null ? 'unknown' : describeInstallScope(installation.prefix),
+        commands: plan.commands,
+        description: plan.description,
+        state: plan.state,
+        runAvailable: planRunsInConsole(plan),
+      },
     };
+  }
+
+  async function updateProbe(force = false): Promise<UpdateProbe> {
+    return (await updatePlan(force)).probe;
+  }
+
+  let consoleUpdateRunning = false;
+
+  /**
+   * Run the plan's commands in one visible WSL console and report what changed.
+   *
+   * The supervisor is paused for the duration: left running, it would see the
+   * unit stop as a lost backend and start its own from the files npm is
+   * replacing (the beta.6 EADDRINUSE bug). It resumes on every outcome, so a
+   * failed install still ends with the service running on the old version.
+   */
+  async function runConsoleUpdate(): Promise<UpdateRunResult> {
+    if (consoleUpdateRunning) throw new Error('A console update is already running.');
+    consoleUpdateRunning = true;
+    try {
+      const before = await updatePlan(false);
+      if (!planRunsInConsole(before.plan)) throw new Error('these commands cannot run in one console');
+      const logPath = buildUpdateLogPath(new Date().toISOString().replace(/[:.]/g, '-'));
+      const script = logPath === null ? null : buildUpdateScript(before.plan.commands, logPath);
+      if (logPath === null || script === null) throw new Error('the update script could not be built');
+      log.info(`console update: ${before.plan.commands.length} command(s), log ${logPath}`);
+      await supervisor.suspendForUpdate();
+      let code: number | null = null;
+      try {
+        ({ code } = await runInConsole({ distro: config.distro, script }));
+      } finally {
+        await supervisor.resumeAfterUpdate();
+      }
+      const after = await updatePlan(true);
+      const result = buildUpdateResult({
+        code,
+        logPath,
+        before: before.probe.installed,
+        after: after.probe.installed,
+        target: after.probe.target,
+        installation: after.installation ?? before.installation,
+      });
+      log.info(
+        `console update finished: code=${code ?? 'null'} success=${result.success} installed=${result.installed ?? 'unknown'}`,
+      );
+      return result;
+    } finally {
+      consoleUpdateRunning = false;
+    }
   }
 
   const supervisor: Supervisor = new Supervisor({
@@ -489,6 +545,9 @@ async function bootstrap(): Promise<void> {
   // after the owner ran a command in a WSL terminal.
   guard('update:probe', async () => await updateProbe());
   guard('update:recheck', async () => await updateProbe(true));
+  // The one channel that runs anything: the same commands the window shows, in
+  // a visible console, and nothing else.
+  guard('update:run', async () => await runConsoleUpdate());
   guard('update:close', () => {
     windows.closeUpdateConfirm();
   });

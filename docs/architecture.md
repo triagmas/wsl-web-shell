@@ -155,13 +155,24 @@ instructions, split the usual way:
   attached backend; discovery only, no `systemctl` and no `sudo`;
 - `src/main/index.ts` — builds the plan from a fresh inspection and the supervisor's
   ownership state (`owned`, `attached`, `none`) and exposes `update:probe`,
-  `update:recheck`, `update:close`;
-- `src/update/*` + `src/preload/update.ts` — the window that renders facts, commands
-  and per-line **Copy** / **Copy all**.
+  `update:recheck`, `update:run`, `update:close`;
+- `src/main/core/update-console.ts` — pure: `buildUpdateScript()` (bash text, log path,
+  first-failure status, guaranteed `start` after `stop`), `buildUpdateResult()` (the
+  verdict the window shows, decided by the version read afterwards) and
+  `planRunsInConsole()`;
+- `src/main/wsl/console.ts` — spawns `wsl.exe -d <distro> --exec /bin/bash -c …` with
+  `windowsHide: false`, no `detached`, and waits for the exit event;
+- `src/main/core/supervisor.ts` — `suspendForUpdate()` / `resumeAfterUpdate()`: the
+  pause flag that keeps recovery, health checks, hand-back and the keepalive re-arm
+  away from a backend a console update owns;
+- `src/update/*` + `src/preload/update.ts` — the window that renders facts, commands,
+  per-line **Copy** / **Copy all**, the **Run in WSL console** button and the result.
 
 `update:recheck` runs the inspection again instead of reading a cache, so the window
-reflects a command the owner just ran. No component stops, starts, installs or writes
-anything in the distribution.
+reflects a command the owner just ran. `update:run` is the only channel that executes
+anything: it runs exactly the shown list in a visible console, with the supervisor
+paused, and re-reads the installation afterwards. Nothing in the app process calls
+`sudo`, `systemctl`, npm or pnpm.
 
 ## Ownership
 
@@ -329,10 +340,15 @@ policy, offline fail-soft) and `tests/r09.test.ts` (composition guards). The
 workspace contract moved to `src/main/core/workspace.ts` so Settings and the
 launcher cannot disagree about a trailing slash (issue #8).
 
-Issue #12 now has `tests/manual-update.test.ts` (exact version guard, manager-specific
-install line, stop/install/start order, every backend/scope branch, refusals) and
-`tests/inspect.test.ts` plus `tests/managed.test.ts`, which pin the read-only
-inspection and cgroup probes. No test starts WSL or touches an installation.
+Issue #12 now has `tests/manual-update.test.ts` (exact version guard, downgrade
+refusal, manager-specific install line, root escalation, stop/install/start order,
+every backend/scope branch, console availability), `tests/update-console.test.ts`
+(script text, first-failure status, guaranteed start, result verdicts) and
+`tests/console-update-runner.test.ts` (console argv, base64, no `detached`), plus
+`tests/inspect.test.ts` and `tests/managed.test.ts`, which pin the read-only
+inspection and cgroup probes. `tests/supervisor.test.ts` pins the pause: no recovery,
+no health check, no keepalive re-arm while a console update owns the backend, and a
+resume that brings the backend back. No test starts WSL or touches an installation.
 
 Configuration gained two fields: `isolateEnvironment` (default on) and
 `runtimeRoot`. Both require a backend restart, so the tray decision stays
